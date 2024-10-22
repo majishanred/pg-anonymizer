@@ -11,6 +11,8 @@ import { Logger } from "../utils/logger";
 import { Config, printConfig } from "../utils/parse-config";
 import { parseLine, parseTable, Table } from "../utils/parse-line";
 import { parseFlags } from "../utils/parse-flags";
+import fs, { PathOrFileDescriptor } from "node:fs";
+import { Readable } from "node:stream";
 
 function dieAndLog(message: string, error: any) {
   console.error(message);
@@ -39,6 +41,10 @@ export default class PgAnonymizer extends Command {
   static flags = {
     version: Flags.version({ char: "v" }),
     help: Flags.help({ char: "h" }),
+    "work-with": Flags.string({
+      default: "connection",
+      aliases: ["w"],
+    }),
     columns: Flags.string({
       char: "c",
       description: "list of columns to anonymize",
@@ -95,6 +101,100 @@ export default class PgAnonymizer extends Command {
   }
 
   async run(): Promise<void> {
+    const { flags } = await this.parse(PgAnonymizer);
+    if (flags["work-with"] === "connection") {
+      await this.workWithConnection();
+    } else if (flags["work-with"] === "file") {
+      await this.workWithFile();
+    } else {
+      throw new Error("Specify type of what lib is working with: 'connection' or 'file'");
+    }
+  }
+
+  async workWithFile() {
+    const { argv, flags, args, metadata, raw } = await this.parse(PgAnonymizer);
+
+    if (flags.silent) {
+      process.env.LOGGING_LEVEL = "none";
+    }
+
+    if (flags.output === "-") {
+      process.env.LOG_AS_COMMENTS = "true";
+    }
+
+    if (flags.verbose) {
+      logger.log({ args, flags, argv, metadata, raw }, metadata);
+    }
+
+    const config: Config = await parseFlags(flags, metadata);
+
+    if (config.locale) {
+      faker.locale = config.locale;
+    }
+
+    if (!config.output) {
+      throw new CLIError("No output configuration provided");
+    }
+
+    printConfig(config);
+
+    sanitizePgDumpArgs(argv as string[]);
+
+    logger.log("");
+    logger.log("Launching pg_dump...");
+
+    const pgDumpFile = fs.readFileSync(argv[0] as PathOrFileDescriptor);
+
+    logger.info("File uploaded, running anonymization.");
+
+    const inputLineResults = readline.createInterface({
+      input: Readable.from(pgDumpFile),
+      crlfDelay: Number.POSITIVE_INFINITY,
+    }) as any as Iterable<string>;
+
+    let table: Table | null = null;
+
+    function processLine(line: string): void | string {
+      if (/^COPY .* FROM stdin;$/.test(line)) {
+        logger.log("");
+
+        table = parseTable(line, config);
+
+        if (config.skip.includes(table.name.toLowerCase())) {
+          logger.log("Skipping... excluded by user");
+          return;
+        }
+
+        if (!table.transform) {
+          logger.log("Skipping... no matching columns");
+          return;
+        }
+
+        const { length } = table.columns.filter(c => c.transform);
+
+        logger.log(`Anonymizing ${chalk.yellow(length)} ${pluralize("column", length)}...`);
+        return;
+      }
+
+      if (table && table.transform && line.trim() && line !== "\\.") {
+        return parseLine(line, table, config);
+      }
+
+      table = null;
+    }
+
+    for await (const line of inputLineResults) {
+      const result = processLine(line) ?? line;
+
+      try {
+        config.output.stream.write(result + "\n");
+      } catch (error) {
+        dieAndLog("Failed to write file", error);
+      }
+    }
+  }
+
+  async workWithConnection(): Promise<void> {
     const { argv, flags, args, metadata, raw } = await this.parse(PgAnonymizer);
 
     if (flags.silent) {
