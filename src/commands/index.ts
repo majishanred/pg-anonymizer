@@ -1,6 +1,6 @@
 import { Args, Command, Flags } from "@oclif/core";
 import { CLIError } from "@oclif/errors";
-import { BooleanFlag, OptionFlag } from "@oclif/core/lib/interfaces/parser";
+import { BooleanFlag, Metadata, OptionFlag, ParsingToken } from "@oclif/core/lib/interfaces/parser";
 import readline from "node:readline";
 import faker from "faker";
 import chalk from "chalk";
@@ -44,6 +44,10 @@ export default class PgAnonymizer extends Command {
     "work-with": Flags.string({
       default: "connection",
       aliases: ["w"],
+    }),
+    input: Flags.string({
+      char: "i",
+      description: "Thing to work with: url to postgress db or path to sql file",
     }),
     columns: Flags.string({
       char: "c",
@@ -101,32 +105,28 @@ export default class PgAnonymizer extends Command {
   }
 
   async run(): Promise<void> {
-    const { flags } = await this.parse(PgAnonymizer);
-    if (flags["work-with"] === "connection") {
-      await this.workWithConnection();
-    } else if (flags["work-with"] === "file") {
-      await this.workWithFile();
+    const { argv, flags, args, metadata, raw } = await this.parse(PgAnonymizer);
+    const config = await parseFlags(flags, metadata);
+
+    if (/[a-zA-Z0-9\/]+(\.sql)+/.test(flags.input as string)) {
+      await this.workWithFile(argv, flags, args, metadata, raw, config);
     } else {
-      throw new Error("Specify type of what lib is working with: 'connection' or 'file'");
+      await this.workWithConnection(argv, flags, args, metadata, raw, config);
     }
   }
 
-  async workWithFile() {
-    const { argv, flags, args, metadata, raw } = await this.parse(PgAnonymizer);
-
+  async workWithFile(argv: unknown[], flags: FlagOutput, args: { PGARG: string | undefined }, metadata: Metadata, raw: ParsingToken[], config: Config): Promise<void> {
     if (flags.silent) {
       process.env.LOGGING_LEVEL = "none";
     }
 
-    if (flags.output === "-") {
+    if (flags.output as unknown as string === "-") {
       process.env.LOG_AS_COMMENTS = "true";
     }
 
     if (flags.verbose) {
       logger.log({ args, flags, argv, metadata, raw }, metadata);
     }
-
-    const config: Config = await parseFlags(flags, metadata);
 
     if (config.locale) {
       faker.locale = config.locale;
@@ -143,7 +143,7 @@ export default class PgAnonymizer extends Command {
     logger.log("");
     logger.log("Launching pg_dump...");
 
-    const pgDumpFile = fs.readFileSync(argv[0] as PathOrFileDescriptor);
+    const pgDumpFile = fs.readFileSync(flags.input as PathOrFileDescriptor);
 
     logger.info("File uploaded, running anonymization.");
 
@@ -194,9 +194,8 @@ export default class PgAnonymizer extends Command {
     }
   }
 
-  async workWithConnection(): Promise<void> {
-    const { argv, flags, args, metadata, raw } = await this.parse(PgAnonymizer);
-
+  async workWithConnection(argv: unknown[], flags: FlagOutput, args: { PGARG: string | undefined }, metadata: Metadata, raw: ParsingToken[], config: Config): Promise<void> {
+    argv.push(flags.input as string);
     if (flags.silent) {
       process.env.LOGGING_LEVEL = "none";
     }
@@ -208,8 +207,6 @@ export default class PgAnonymizer extends Command {
     if (flags.verbose) {
       logger.log({ args, flags, argv, metadata, raw }, metadata);
     }
-
-    const config: Config = await parseFlags(flags, metadata);
 
     if (config.locale) {
       faker.locale = config.locale;
