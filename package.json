@@ -1,18 +1,18 @@
 {
-  "name": "@majishanred/pg-anon",
+  "name": "@majilol/pg-anon",
   "description": "Export your postgreSQL database anonymized",
-  "version": "1.0.0",
-  "author": "Raphaël Huchet @rap2hpoutre",
+  "version": "0.1.0",
+  "author": "Matvey Kalashnikov @majilol",
   "bin": {
     "pg-anon": "bin/run"
   },
   "bugs": {
-    "url": "https://github.com/rap2hpoutre/pg-anonymizer/issues"
+    "url": "https://github.com/majishanred/pg-anonymizer/issues"
   },
-  "homepage": "https://github.com/rap2hpoutre/pg-anonymizer",
+  "homepage": "https://github.com/majishanred/pg-anonymizer",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/rap2hpoutre/pg-anonymizer.git"
+    "url": "git+https://github.com/majishanred/pg-anonymizer.git"
   },
   "license": "MIT",
   "main": "dist/index.js",

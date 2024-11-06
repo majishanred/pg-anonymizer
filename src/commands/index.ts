@@ -41,10 +41,6 @@ export default class PgAnonymizer extends Command {
   static flags = {
     version: Flags.version({ char: "v" }),
     help: Flags.help({ char: "h" }),
-    "work-with": Flags.string({
-      default: "connection",
-      aliases: ["w"],
-    }),
     input: Flags.string({
       char: "i",
       description: "Thing to work with: url to postgress db or path to sql file",
