@@ -16,6 +16,7 @@ export interface Output {
 }
 
 export interface Config {
+  input?: string,
   skip: string[],
   columns: Column[];
   transformer?: Transformer;
