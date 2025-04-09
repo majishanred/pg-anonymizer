@@ -1,6 +1,6 @@
 import { Args, Command, Flags } from "@oclif/core";
 import { CLIError } from "@oclif/errors";
-import { BooleanFlag, OptionFlag } from "@oclif/core/lib/interfaces/parser";
+import { BooleanFlag, Metadata, OptionFlag, ParsingToken } from "@oclif/core/lib/interfaces/parser";
 import readline from "node:readline";
 import faker from "faker";
 import chalk from "chalk";
@@ -11,6 +11,8 @@ import { Logger } from "../utils/logger";
 import { Config, printConfig } from "../utils/parse-config";
 import { parseLine, parseTable, Table } from "../utils/parse-line";
 import { parseFlags } from "../utils/parse-flags";
+import fs, { PathOrFileDescriptor } from "node:fs";
+import { Readable } from "node:stream";
 
 function dieAndLog(message: string, error: any) {
   console.error(message);
@@ -39,6 +41,10 @@ export default class PgAnonymizer extends Command {
   static flags = {
     version: Flags.version({ char: "v" }),
     help: Flags.help({ char: "h" }),
+    input: Flags.string({
+      char: "i",
+      description: "Thing to work with: url to postgress db or path to sql file",
+    }),
     columns: Flags.string({
       char: "c",
       description: "list of columns to anonymize",
@@ -96,7 +102,96 @@ export default class PgAnonymizer extends Command {
 
   async run(): Promise<void> {
     const { argv, flags, args, metadata, raw } = await this.parse(PgAnonymizer);
+    const config = await parseFlags(flags, metadata);
 
+    if (/[a-zA-Z0-9\/]+(\.sql)+/.test(flags.input as string)) {
+      await this.workWithFile(argv, flags, args, metadata, raw, config);
+    } else {
+      await this.workWithConnection(argv, flags, args, metadata, raw, config);
+    }
+  }
+
+  async workWithFile(argv: unknown[], flags: FlagOutput, args: { PGARG: string | undefined }, metadata: Metadata, raw: ParsingToken[], config: Config): Promise<void> {
+    if (flags.silent) {
+      process.env.LOGGING_LEVEL = "none";
+    }
+
+    if (flags.output as unknown as string === "-") {
+      process.env.LOG_AS_COMMENTS = "true";
+    }
+
+    if (flags.verbose) {
+      logger.log({ args, flags, argv, metadata, raw }, metadata);
+    }
+
+    if (config.locale) {
+      faker.locale = config.locale;
+    }
+
+    if (!config.output) {
+      throw new CLIError("No output configuration provided");
+    }
+
+    printConfig(config);
+
+    sanitizePgDumpArgs(argv as string[]);
+
+    logger.log("");
+    logger.log("Launching pg_dump...");
+
+    const pgDumpFile = fs.readFileSync(flags.input as PathOrFileDescriptor);
+
+    logger.info("File uploaded, running anonymization.");
+
+    const inputLineResults = readline.createInterface({
+      input: Readable.from(pgDumpFile),
+      crlfDelay: Number.POSITIVE_INFINITY,
+    }) as any as Iterable<string>;
+
+    let table: Table | null = null;
+
+    function processLine(line: string): void | string {
+      if (/^COPY .* FROM stdin;$/.test(line)) {
+        logger.log("");
+
+        table = parseTable(line, config);
+
+        if (config.skip.includes(table.name.toLowerCase())) {
+          logger.log("Skipping... excluded by user");
+          return;
+        }
+
+        if (!table.transform) {
+          logger.log("Skipping... no matching columns");
+          return;
+        }
+
+        const { length } = table.columns.filter(c => c.transform);
+
+        logger.log(`Anonymizing ${chalk.yellow(length)} ${pluralize("column", length)}...`);
+        return;
+      }
+
+      if (table && table.transform && line.trim() && line !== "\\.") {
+        return parseLine(line, table, config);
+      }
+
+      table = null;
+    }
+
+    for await (const line of inputLineResults) {
+      const result = processLine(line) ?? line;
+
+      try {
+        config.output.stream.write(result + "\n");
+      } catch (error) {
+        dieAndLog("Failed to write file", error);
+      }
+    }
+  }
+
+  async workWithConnection(argv: unknown[], flags: FlagOutput, args: { PGARG: string | undefined }, metadata: Metadata, raw: ParsingToken[], config: Config): Promise<void> {
+    argv.push(flags.input as string);
     if (flags.silent) {
       process.env.LOGGING_LEVEL = "none";
     }
@@ -108,8 +203,6 @@ export default class PgAnonymizer extends Command {
     if (flags.verbose) {
       logger.log({ args, flags, argv, metadata, raw }, metadata);
     }
-
-    const config: Config = await parseFlags(flags, metadata);
 
     if (config.locale) {
       faker.locale = config.locale;
